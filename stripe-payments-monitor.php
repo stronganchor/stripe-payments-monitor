@@ -3,7 +3,7 @@
 Plugin Name: Stripe Payments Monitor
 Plugin URI:  https://github.com/stronganchor/stripe-payments-monitor
 Description: Displays per-client revenue & subscription health inside MainWP. Flags overdue/failed payers and lets you map customers ⇄ websites.
-Version:     0.1.0
+Version:     0.1.1
 Author:      Strong Anchor Tech
 Author URI:  https://stronganchortech.com/
 */
@@ -89,22 +89,21 @@ function spm_dashboard_page() {
 	// ---------------------------------------------------------------------
 	// 2a. Pull MainWP sites list
 	$sites = spm_get_mainwp_sites();       // ['https://example.com' => 'Example Site']
-	$base_domains = array_map( 'spm_extract_domain', array_keys( $sites ) );
 
 	// ---------------------------------------------------------------------
 	// 2b. Pull Stripe customers + revenue figures
-	$customers        = [];                // keyed by cust id
-	$overdue_ids      = [];                // list of customer ids flagged red
-	$site_map         = get_option( 'stripe_pm_site_customer_map', [] ); // site => cust
-	$matched_sites    = [];                // site urls that have a match
-	$matched_custs    = [];                // cust ids that have a match
+	$customers        = [];
+	$overdue_ids      = [];
+	$site_map         = get_option( 'stripe_pm_site_customer_map', [] );
+	$matched_sites    = [];
+	$matched_custs    = [];
 
-	$autoSortIterator = $stripe->customers->all([
-		'limit' => 100,
-		'expand' => ['data.subscriptions']
+	$iterator = $stripe->customers->all([
+		'limit'  => 100,
+		'expand' => ['data.subscriptions'],
 	])->autoPagingIterator();
 
-	foreach ( $autoSortIterator as $cust ) {
+	foreach ( $iterator as $cust ) {
 		$cust_id   = $cust->id;
 		$name      = $cust->name ?: '(No name)';
 		$email     = $cust->email ?: '(No email)';
@@ -130,23 +129,21 @@ function spm_dashboard_page() {
 					$mrr_cents += $amount;
 				} elseif ( $p->interval === 'year' ) {
 					$mrr_cents += $amount / 12;
-				} else { /* week/day not handled */ }
+				}
 			}
 		}
 
 		// ----- Last successful payment date -----------------------------
-		$last_charge = $stripe->charges->all( [
+		$last_charge_list = $stripe->charges->all( [
 			'customer' => $cust_id,
-			'limit'    => 1,
-			'sort'     => 'desc',
+			'limit'    => 1,               // newest-first by default
 		] );
-		$last_paid   = isset( $last_charge->data[0] ) ? $last_charge->data[0]->created : 0;
+		$last_paid = isset( $last_charge_list->data[0] ) ? $last_charge_list->data[0]->created : 0;
 
-		// If no payment in >30 days OR failed invoices exist, flag red
+		// Flag overdue (>30 d) or failed invoice
 		$days_since_last = $last_paid ? ( time() - $last_paid ) / DAY_IN_SECONDS : 9999;
 		if ( $days_since_last > 30 ) { $has_overdue_invoice = true; }
 
-		// quick check of latest invoice status
 		$latest_inv = $stripe->invoices->all( [
 			'customer' => $cust_id,
 			'limit'    => 1,
@@ -168,23 +165,21 @@ function spm_dashboard_page() {
 	}
 
 	// ---------------------------------------------------------------------
-	// 2c. AUT0 MATCHING – customer ⇄ site
-	foreach ( $sites as $site_url => $site_title ) {
+	// 2c. AUTO MATCHING – customer ⇄ site
+	foreach ( $sites as $site_url => $title ) {
+
 		$domain = spm_extract_domain( $site_url );
 
-		// 1. manual mapping wins
 		if ( isset( $site_map[ $site_url ] ) && isset( $customers[ $site_map[ $site_url ] ] ) ) {
-			$matched_sites[ $site_url ]          = $site_map[ $site_url ];
+			$matched_sites[ $site_url ]        = $site_map[ $site_url ];
 			$matched_custs[ $site_map[ $site_url ] ][] = $site_url;
 			continue;
 		}
 
-		// 2. otherwise try auto match
-		foreach ( $customers as $cid => $cust ) {
-			$haystack = strtolower( $cust['email'] . ' ' . $cust['name'] );
-			if ( strpos( $haystack, $domain ) !== false ) {
-				$matched_sites[ $site_url ]          = $cid;
-				$matched_custs[ $cid ][]             = $site_url;
+		foreach ( $customers as $cid => $c ) {
+			if ( strpos( strtolower( $c['email'] . ' ' . $c['name'] ), $domain ) !== false ) {
+				$matched_sites[ $site_url ]  = $cid;
+				$matched_custs[ $cid ][]     = $site_url;
 				break;
 			}
 		}
@@ -207,8 +202,8 @@ function spm_dashboard_page() {
 		$c      = $customers[ $cid ];
 		$is_red = in_array( $cid, $overdue_ids, true );
 		$rows[] = [
-			'red'      => $is_red,
-			'html'     => sprintf(
+			'red'  => $is_red,
+			'html' => sprintf(
 				'<tr class="%s"><td><a href="%s" target="_blank">%s</a></td><td>%s</td><td>%s</td><td style="text-align:right">%0.2f</td><td style="text-align:right">%0.2f</td><td>%s</td></tr>',
 				$is_red ? 'spm-error' : '',
 				esc_url( $site_url ),
@@ -221,12 +216,7 @@ function spm_dashboard_page() {
 			)
 		];
 	}
-
-	// Sort: red first, then alpha
-	usort( $rows, function( $a, $b ) {
-		if ( $a['red'] === $b['red'] ) { return 0; }
-		return $a['red'] ? -1 : 1;
-	} );
+	usort( $rows, fn( $a, $b ) => $a['red'] === $b['red'] ? 0 : ( $a['red'] ? -1 : 1 ) );
 	foreach ( $rows as $r ) { echo $r['html']; }
 	echo '</tbody></table>';
 
@@ -276,19 +266,14 @@ function spm_dashboard_page() {
 /* -------------------------------------------------------------------------- */
 function spm_extract_domain( $url ) {
 	$host = parse_url( $url, PHP_URL_HOST );
-	$host = preg_replace( '/^www\./', '', strtolower( $host ) );
-	return $host;
+	return preg_replace( '/^www\./', '', strtolower( $host ) );
 }
 
 function spm_get_mainwp_sites() {
 	global $wpdb;
 	$table = $wpdb->prefix . 'mainwp_wp';
 	$rows  = $wpdb->get_results( "SELECT url, name FROM $table" );
-	$out   = [];
-	foreach ( $rows as $r ) {
-		$out[ $r->url ] = $r->name;
-	}
-	return $out;
+	return array_column( $rows, 'name', 'url' );
 }
 
 /* -------------------------------------------------------------------------- */
