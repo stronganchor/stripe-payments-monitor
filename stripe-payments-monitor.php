@@ -311,3 +311,13 @@ add_action('admin_head',function(){echo'<style>
 table.widefat td{vertical-align:top}form button.button-link{background:none;border:none;color:#2271b1;cursor:pointer;padding:0;margin:0}
 form button.button-link:hover{text-decoration:underline}em{color:#666}
 </style>';});
+
+add_action( 'init', function () {
+	if ( ! wp_next_scheduled( 'spm_hourly_refresh' ) ) {
+		wp_schedule_event( time(), 'hourly', 'spm_hourly_refresh' );
+	}
+});
+add_action( 'spm_hourly_refresh', function () {
+	$key = get_option( 'spm_stripe_secret_key', '' );
+	if ( $key ) { spm_get_cached_report( $key, true ); }
+});
