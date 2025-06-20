@@ -1,34 +1,39 @@
 <?php
 /*
 Plugin Name: Stripe Payments Monitor
-Description: Revenue & subscription health report in MainWP. Duplicate customers merged, ignore lists, notes, unlinking supported; hourly auto-refresh; robust overdue logic.
-Version:     0.4.1
+Description: Revenue & subscription health report in MainWP. Duplicate customers merged; ignore lists; unlink & internal lists; hourly auto-refresh.
+Version:     0.4.3
 Author:      Strong Anchor Tech
 */
 
 if ( ! defined( 'ABSPATH' ) ) { exit; }
 
-/* ───────────── 0. CONFIG ───────────── */
-const SPM_CACHE_MINS   = 15;          // Stripe cache lifetime
-const SPM_OVERDUE_DAYS = 30;          // last-payment threshold
+/* ═════════════ 0. CONFIG ════════════════════ */
+const SPM_CACHE_MINS   = 15;
+const SPM_OVERDUE_DAYS = 30;
 
 /* ═════════════ 1. ACTION HANDLER (runs before output) ════════════ */
 add_action( 'admin_init', 'spm_handle_actions' );
 function spm_handle_actions() {
 	if ( ! isset( $_POST['spm_action'] ) ) { return; }
-
 	check_admin_referer( 'spm_action', 'spm_nonce' );
 
 	$map          = get_option( 'stripe_pm_site_customer_map', [] );
-	$ignore_sites = get_option( 'spm_ignore_sites',  [] );
+	$ignore_sites = get_option( 'spm_ignore_sites',   [] );
 	$ignore_cids  = get_option( 'spm_ignore_clients', [] );
-	$site_notes   = get_option( 'spm_site_notes',    [] );
-	$client_notes = get_option( 'spm_client_notes',  [] );
+	$unlinked     = get_option( 'spm_unlinked_sites', [] );
+	$site_notes   = get_option( 'spm_site_notes',     [] );
+	$client_notes = get_option( 'spm_client_notes',   [] );
 
 	switch ( sanitize_text_field( $_POST['spm_action'] ) ) {
-
 		case 'unlink':
-			unset( $map[ esc_url_raw( $_POST['site_url'] ) ] );
+			$site = esc_url_raw( $_POST['site_url'] );
+			unset( $map[ $site ] );
+			$unlinked[ $site ] = true;
+			break;
+
+		case 'allow_automatch':
+			unset( $unlinked[ esc_url_raw( $_POST['site_url'] ) ] );
 			break;
 
 		case 'ignore_client':
@@ -54,25 +59,28 @@ function spm_handle_actions() {
 			break;
 
 		case 'save_mapping':
-			$map[ esc_url_raw( $_POST['site_url'] ) ] = sanitize_text_field( $_POST['customer_id'] );
+			$site = esc_url_raw( $_POST['site_url'] );
+			$map[ $site ] = sanitize_text_field( $_POST['customer_id'] );
+			unset( $unlinked[ $site ] );  // mapping overrides unlink
 			break;
 	}
 
 	update_option( 'stripe_pm_site_customer_map', $map );
 	update_option( 'spm_ignore_sites',   $ignore_sites );
 	update_option( 'spm_ignore_clients', $ignore_cids );
+	update_option( 'spm_unlinked_sites', $unlinked );
 	update_option( 'spm_site_notes',     $site_notes );
 	update_option( 'spm_client_notes',   $client_notes );
 
-	/* redirect back to the report */
 	wp_safe_redirect( admin_url( 'admin.php?page=stripe-payments-monitor' ) );
 	exit;
 }
 
-/* ═════════════ 2. MENU & SETTINGS ═══════════ */
+/* ═════════════ 2. MENU & SETTINGS PAGE ════════════════════════════ */
 add_action( 'admin_menu', function () {
 	add_menu_page( 'Payments Monitor', 'Payments Monitor', 'manage_options',
 	               'stripe-payments-monitor', 'spm_dashboard_page', 'dashicons-chart-line' );
+
 	add_submenu_page( 'stripe-payments-monitor', 'Stripe Monitor Settings', 'Settings',
 	                  'manage_options', 'stripe-payments-monitor-settings', 'spm_settings_page' );
 } );
@@ -87,54 +95,64 @@ function spm_settings_page() {
 		delete_transient( 'spm_cached_report' );
 		delete_option( 'spm_ignore_clients' );
 		delete_option( 'spm_ignore_sites' );
+		delete_option( 'spm_unlinked_sites' );
 		delete_option( 'spm_client_notes' );
 		delete_option( 'spm_site_notes' );
-		echo '<div class="notice notice-success"><p>Cache & ignore lists cleared.</p></div>';
+		echo '<div class="notice notice-success"><p>Cache & lists cleared.</p></div>';
 	}
+
 	$key = esc_attr( get_option( 'spm_stripe_secret_key', '' ) );
 	?>
-	<div class="wrap"><h1>Stripe Payments Monitor – Settings</h1>
-	<form method="post"><?php wp_nonce_field( 'spm_settings', 'spm_nonce' ); ?>
-	<table class="form-table">
-		<tr><th><label for="spm_secret_key">Stripe <code>sk_live_…</code> Secret&nbsp;Key</label></th>
-		    <td><input type="text" id="spm_secret_key" name="spm_secret_key" class="regular-text"
-		               value="<?php echo $key; ?>" required></td></tr>
-	</table>
-	<p class="submit">
-		<button name="spm_save_settings" class="button button-primary">Save</button>
-		<button name="spm_clear"         class="button">Clear cache & ignore lists</button>
-	</p>
-	</form>
-	<p>You must have the Stripe PHP SDK installed
-	   (<code>composer require stripe/stripe-php</code>).</p>
+	<div class="wrap">
+		<h1>Stripe Payments Monitor – Settings</h1>
+		<form method="post"><?php wp_nonce_field( 'spm_settings', 'spm_nonce' ); ?>
+			<table class="form-table">
+				<tr>
+					<th><label for="spm_secret_key">Stripe <code>sk_live_…</code> Secret&nbsp;Key</label></th>
+					<td><input type="text" name="spm_secret_key" id="spm_secret_key" class="regular-text"
+					           value="<?php echo $key; ?>" required></td>
+				</tr>
+			</table>
+			<p class="submit">
+				<button name="spm_save_settings" class="button button-primary">Save</button>
+				<button name="spm_clear"         class="button">Clear cache & lists</button>
+			</p>
+		</form>
+		<p>You must have the Stripe PHP SDK installed
+		   (<code>composer require stripe/stripe-php</code>).</p>
 	</div>
 	<?php
 }
 
-/* ═════════════ 3. DASHBOARD PAGE ════════════ */
+/* ═════════════ 3. DASHBOARD PAGE ══════════════════════════════════ */
 function spm_dashboard_page() {
 
+	/* Stripe key */
 	$key = get_option( 'spm_stripe_secret_key', '' );
-	if ( ! $key ) { echo '<div class="wrap"><h1>Payments Monitor</h1><p>Please set your Stripe secret key first.</p></div>'; return; }
+	if ( ! $key ) {
+		echo '<div class="wrap"><h1>Payments Monitor</h1><p>Please set your Stripe secret key first.</p></div>';
+		return;
+	}
 
-	/* build fetch */
+	/* Refresh? */
 	$force = isset( $_GET['spm_refresh'] ) && wp_verify_nonce( $_GET['spm_refresh'], 'spm_refresh' );
 	$data  = spm_get_cached_report( $key, $force );
 	if ( is_wp_error( $data ) ) {
 		echo '<div class="wrap"><h1>Stripe Payments Monitor</h1><p>Error: ' .
-		     esc_html( $data->get_error_message() ) . '</p></div>'; return;
+		     esc_html( $data->get_error_message() ) . '</p></div>';  return;
 	}
-	extract( $data );  // customers, overdue_ids, sites, matched_sites, matched_custs
+	extract( $data ); // customers, overdue_ids, sites, matched_sites, matched_custs
 
-	/* ignore filters */
-	$ignore_sites = get_option( 'spm_ignore_sites', [] );
+	/* lists / notes */
+	$ignore_sites = get_option( 'spm_ignore_sites',   [] );
 	$ignore_cids  = get_option( 'spm_ignore_clients', [] );
+	$unlinked     = get_option( 'spm_unlinked_sites', [] );
+	$site_notes   = get_option( 'spm_site_notes',     [] );
+	$client_notes = get_option( 'spm_client_notes',   [] );
 	foreach ( $ignore_cids as $cid => $_ ) { unset( $overdue_ids[ $cid ] ); }
 	$sites = array_diff_key( $sites, $ignore_sites );
-	$site_notes   = get_option( 'spm_site_notes',   [] );
-	$client_notes = get_option( 'spm_client_notes', [] );
 
-	/* helper button */
+	/* helper */
 	function spm_btn( $action,$label,$hidden=[],$note=false ){
 		$o='<form method="post" style="display:inline">'.wp_nonce_field('spm_action','spm_nonce',true,false).
 		   '<input type="hidden" name="spm_action" value="'.$action.'">';
@@ -143,30 +161,29 @@ function spm_dashboard_page() {
 		return $o.'<button class="button-link">'.$label.'</button></form>';
 	}
 
-	/* header */
+	/* Header */
 	echo '<div class="wrap"><h1>Stripe Payments Monitor</h1>
-		  <p><a href="'.esc_url( add_query_arg('spm_refresh', wp_create_nonce('spm_refresh')) ).'"
-		        class="button">Refresh data</a></p>';
+	      <p><a href="'.esc_url( add_query_arg('spm_refresh',wp_create_nonce('spm_refresh')) ).'"
+	            class="button">Refresh data</a></p>';
 
-	/* Matched */
+	/* ========== Matched Clients table ========== */
 	echo '<h2>Matched Clients</h2><table class="widefat"><thead><tr>
-	<th>Website</th><th>Customer</th><th>E-mail</th>
-	<th style="text-align:right">Lifetime&nbsp;$</th><th style="text-align:right">MRR&nbsp;$</th>
-	<th>Last&nbsp;Pay</th><th>Actions</th></tr></thead><tbody>';
+	      <th>Website</th><th>Customer</th><th>E-mail</th>
+	      <th style="text-align:right">Lifetime&nbsp;$</th>
+	      <th style="text-align:right">MRR&nbsp;$</th><th>Last&nbsp;Pay</th><th>Actions</th></tr></thead><tbody>';
 
 	$rows=[];
 	foreach($matched_sites as $site=>$cid){
-		if(isset($ignore_sites[$site]))continue;
-		$c=$customers[$cid]; $red=isset($overdue_ids[$cid]);
-		$note=$client_notes[$cid]??'';
+		if(isset($ignore_sites[$site]))continue; /* internal */
+		$c=$customers[$cid]; $red=isset($overdue_ids[$cid]); $note=$client_notes[$cid]??'';
 		$rows[]=[
 			'red'=>$red,
-			'html'=>'<tr class="'.($red?'spm-error':'').'"><td><a href="'.esc_url($site).
-			        '" target="_blank">'.esc_html($site).'</a></td><td>'.esc_html($c['name']).
-			        ($note?' <em>('.esc_html($note).')</em>':'').'</td><td>'.esc_html($c['email']).'</td>'.
-			        '<td style="text-align:right">'.number_format($c['total'],2).'</td>'.
-			        '<td style="text-align:right">'.number_format($c['mrr'],2).'</td>'.
-			        '<td>'.($c['last_paid']?date_i18n('Y-m-d',$c['last_paid']):'—').'</td><td>'.
+			'html'=>'<tr class="'.($red?'spm-error':'').'"><td><a target="_blank" href="'.esc_url($site).'">'.
+			        esc_html($site).'</a></td><td>'.esc_html($c['name']).($note?' <em>('.esc_html($note).')</em>':'').
+			        '</td><td>'.esc_html($c['email']).'</td><td style="text-align:right">'.
+			        number_format($c['total'],2).'</td><td style="text-align:right">'.
+			        number_format($c['mrr'],2).'</td><td>'.
+			        ($c['last_paid']?date_i18n('Y-m-d',$c['last_paid']):'—').'</td><td>'.
 			        spm_btn('unlink','Unlink',['site_url'=>$site]).
 			        spm_btn(isset($ignore_cids[$cid])?'unignore_client':'ignore_client',
 			                isset($ignore_cids[$cid])?'Un-ignore':'Ignore',['cid'=>$cid],true).
@@ -177,12 +194,13 @@ function spm_dashboard_page() {
 	foreach($rows as $r){echo $r['html'];}
 	echo '</tbody></table>';
 
-	/* Unmatched sites */
+	/* ========== Unmatched Websites table ========== */
 	$unmatched_sites=array_diff_key($sites,$matched_sites,$ignore_sites);
 	echo '<h2>Unmatched Websites</h2>';
 	if($unmatched_sites){
 		echo '<table class="widefat"><thead><tr><th>Site</th><th>Link</th><th>Actions</th></tr></thead><tbody>';
 		foreach($unmatched_sites as $site=>$_){
+			$is_unlinked = isset( $unlinked[ $site ] );
 			echo '<tr><td>'.esc_html($site).'</td><td>'.
 			     '<form method="post" style="margin:0">'.wp_nonce_field('spm_action','spm_nonce',true,false).
 			     '<input type="hidden" name="spm_action" value="save_mapping">'.
@@ -192,12 +210,27 @@ function spm_dashboard_page() {
 				echo '<option value="'.$cid.'">'.esc_html($c['name'].' ('.$c['email'].')').'</option>';
 			}
 			echo '</select> <button class="button">Save</button></form></td><td>'.
-			     spm_btn('ignore_site','Mark internal',['site_url'=>$site],true).'</td></tr>';
+			     spm_btn('ignore_site','Mark internal',['site_url'=>$site],true).
+			     ( $is_unlinked ? spm_btn('allow_automatch','Allow auto-match',['site_url'=>$site]) : '' ).
+			     '</td></tr>';
 		}
 		echo '</tbody></table>';
 	}else echo '<p><em>No unmatched websites (excluding internal).</em></p>';
 
-	/* Unmatched customers */
+	/* ========== Internal Websites table ========== */
+	echo '<h2>Internal Websites</h2>';
+	if( $ignore_sites ){
+		echo '<table class="widefat"><thead><tr><th>Site</th><th>Note</th><th>Actions</th></tr></thead><tbody>';
+		foreach($ignore_sites as $site_url => $_){
+			$note = $site_notes[$site_url]??'';
+			echo '<tr><td>'.esc_html($site_url).'</td><td>'.esc_html($note).'</td><td>'.
+			     spm_btn('unignore_site','Un-mark internal',['site_url'=>$site_url]).
+			     '</td></tr>';
+		}
+		echo '</tbody></table>';
+	}else echo '<p><em>No sites marked as internal.</em></p>';
+
+	/* ========== Unmatched customers table ========== */
 	$unmatched_cust=array_diff_key($customers,$matched_custs,$ignore_cids);
 	echo '<h2>Unmatched Stripe Customers</h2>';
 	if($unmatched_cust){
@@ -210,7 +243,8 @@ function spm_dashboard_page() {
 			     '<input type="hidden" name="customer_id" value="'.$cid.'">'.
 			     '<input type="text" name="site_url" placeholder="https://site.com" style="width:200px">'.
 			     '<button class="button">Link</button></form></td><td>'.
-			     spm_btn('ignore_client','Ignore',['cid'=>$cid],true).'</td></tr>';
+			     spm_btn('ignore_client','Ignore',['cid'=>$cid],true).
+			     '</td></tr>';
 		}
 		echo '</tbody></table>';
 	}else echo '<p><em>No unmatched customers (excluding ignored).</em></p>';
