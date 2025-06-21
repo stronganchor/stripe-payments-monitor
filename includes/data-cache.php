@@ -78,19 +78,15 @@ function spm_get_cached_report( string $secret, bool $force = false ) {
         $merged    = [];
 
         foreach ( $raw as $cu ) {
-            // Determine alias by email or fallback to name or ID
             $alias = strtolower( trim( $cu->email ?: $cu->name ) );
             if ( ! $alias ) {
                 $alias = $cu->id;
             }
-
-            // Map every real ID to the alias
             $id2alias[ $cu->id ] = $alias;
 
             if ( ! isset( $merged[ $alias ] ) ) {
                 $merged[ $alias ] = $cu;
             } else {
-                // Merge subscription arrays
                 $merged[ $alias ]->subscriptions->data =
                     array_merge(
                         $merged[ $alias ]->subscriptions->data,
@@ -118,7 +114,7 @@ function spm_get_cached_report( string $secret, bool $force = false ) {
         }
 
         //
-        // 3) OPEN INVOICES → truly past due
+        // 3) OPEN INVOICES → flag only if explicitly past due
         //
         $overdue_ids = [];
         foreach ( $stripe->invoices->all([
@@ -131,11 +127,8 @@ function spm_get_cached_report( string $secret, bool $force = false ) {
                 continue;
             }
 
-            // Determine an effective due timestamp
-            $due = $inv->due_date
-                 ?: $inv->next_payment_attempt
-                 ?: $inv->created;
-
+            // Only due_date or next_payment_attempt count
+            $due = $inv->due_date ?: $inv->next_payment_attempt;
             if ( $due && $due < time() ) {
                 $overdue_ids[ $alias ] = true;
             }
@@ -146,7 +139,6 @@ function spm_get_cached_report( string $secret, bool $force = false ) {
         //
         $customers = [];
         foreach ( $merged as $alias => $cu ) {
-            // Calculate MRR
             $mrr = 0;
             foreach ( $cu->subscriptions->data as $sub ) {
                 if ( $sub->status !== 'active' ) {
@@ -161,18 +153,17 @@ function spm_get_cached_report( string $secret, bool $force = false ) {
             $total = $life_tot[ $alias ] ?? 0;
             $paid  = $last_paid[ $alias ] ?? 0;
 
-            // Flag overdue if > X days since last successful charge
             if ( ( time() - $paid ) / DAY_IN_SECONDS > SPM_OVERDUE_DAYS ) {
                 $overdue_ids[ $alias ] = true;
             }
 
             $customers[ $alias ] = [
-                'id'         => $alias,
-                'name'       => $cu->name ?: '(No name)',
-                'email'      => $cu->email ?: '(No email)',
-                'total'      => $total / 100,
-                'mrr'        => round( $mrr / 100, 2 ),
-                'last_paid'  => $paid,
+                'id'        => $alias,
+                'name'      => $cu->name  ?: '(No name)',
+                'email'     => $cu->email ?: '(No email)',
+                'total'     => $total  / 100,
+                'mrr'       => round( $mrr / 100, 2 ),
+                'last_paid' => $paid,
             ];
         }
 
@@ -190,15 +181,12 @@ function spm_get_cached_report( string $secret, bool $force = false ) {
         $matched_custs = [];
 
         foreach ( $sites as $site_url => $title ) {
-            // Skip sites the user explicitly unlinked
             if ( isset( $unlinked_sites[ $site_url ] ) ) {
                 continue;
             }
 
-            // Manual override
             $alias = $manual[ $site_url ] ?? null;
 
-            // Auto-match by domain fragment
             if ( ! $alias ) {
                 $domain = preg_replace( '/^www\./', '', strtolower( parse_url( $site_url, PHP_URL_HOST ) ) );
                 foreach ( $customers as $aid => $c ) {
@@ -215,10 +203,9 @@ function spm_get_cached_report( string $secret, bool $force = false ) {
             }
         }
 
-        // Pack & cache the result
         $package = compact( 'customers', 'overdue_ids', 'sites', 'matched_sites', 'matched_custs' );
-
         set_transient( $cache_key, $package, SPM_CACHE_MINS * MINUTE_IN_SECONDS );
+
         return $package;
 
     } catch ( \Throwable $e ) {
