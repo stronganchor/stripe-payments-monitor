@@ -92,6 +92,9 @@ class SPM_Action_Handler {
 		update_option( 'spm_site_notes',     $site_notes );
 		update_option( 'spm_client_notes',   $client_notes );
 
+		// Clear the cached Stripe report so our manual mapping shows up immediately
+    		delete_transient( 'spm_cached_report' );
+
 		// Redirect back to dashboard.
 		wp_safe_redirect( admin_url( 'admin.php?page=stripe-payments-monitor' ) );
 		exit;
