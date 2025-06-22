@@ -116,27 +116,36 @@ class SPM_Admin_Dashboard_View {
         echo '<h2>Unmatched Websites</h2>';
         if ( $unmatched ) {
             echo '<table class="widefat"><thead><tr><th>Site</th><th>Link to customer</th><th>Actions</th></tr></thead><tbody>';
+
+            // Sort customers alphabetically by name for the dropdown
+            $sorted_customers = $customers;
+            uasort( $sorted_customers, function( $a, $b ) {
+                return strcasecmp( $a['name'], $b['name'] );
+            } );
+
             foreach ( $unmatched as $site_url => $title ) {
                 $is_unlinked = isset( $unlinked[ $site_url ] );
                 echo '<tr><td>' . esc_html( $site_url ) . '</td><td>';
                 echo '<form method="post" style="margin:0">' . wp_nonce_field( 'spm_action', 'spm_nonce', true, false ) .
                      '<input type="hidden" name="spm_action" value="save_mapping">' .
-                     '<input type="hidden" name="site_url" value="' . esc_attr( $site_url ) . '">' .
-                     '<select name="customer_id">';
-                foreach ( $customers as $cid => $c ) {
+                     '<input type="hidden" name="site_url" value="' . esc_attr( $site_url ) . '">';
+
+                echo '<select name="customer_id">';
+                foreach ( $sorted_customers as $cid => $c ) {
                     echo '<option value="' . esc_attr( $cid ) . '">' . esc_html( $c['name'] . ' (' . $c['email'] . ')' ) . '</option>';
                 }
                 echo '</select> <button class="button">Save</button></form>';
                 echo '</td><td>' .
                      spm_btn( 'ignore_site', 'Mark internal', [ 'site_url' => $site_url ], true );
                 if ( $is_unlinked ) {
-                    echo spm_btn( 'allow_automatch', 'Allow auto-match', [ 'site_url' => $site_url ] );
+                    echo ' ' . spm_btn( 'allow_automatch', 'Allow auto-match', [ 'site_url' => $site_url ] );
                 }
                 echo '</td></tr>';
             }
             echo '</tbody></table>';
         } else {
             echo '<p><em>No unmatched websites (excluding internal).</em></p>';
+        } (excluding internal).</em></p>';
         }
 
         // 3) Internal Websites
