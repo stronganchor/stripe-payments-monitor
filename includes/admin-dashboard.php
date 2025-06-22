@@ -145,7 +145,6 @@ class SPM_Admin_Dashboard_View {
             echo '</tbody></table>';
         } else {
             echo '<p><em>No unmatched websites (excluding internal).</em></p>';
-        } (excluding internal).</em></p>';
         }
 
         // 3) Internal Websites
