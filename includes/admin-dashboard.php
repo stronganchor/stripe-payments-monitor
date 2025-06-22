@@ -36,7 +36,16 @@ class SPM_Admin_Dashboard_View {
             return;
         }
 
-        extract( $data ); // customers, overdue_ids, sites, matched_sites, matched_custs
+        extract( $data ); // $customers, $overdue_ids, $sites, $matched_sites, $matched_custs
+
+        // Apply manual site→customer mappings immediately, without clearing cache
+        $manual_map = get_option( 'stripe_pm_site_customer_map', [] );
+        foreach ( $manual_map as $site_url => $cid ) {
+            if ( isset( $customers[ $cid ] ) && isset( $sites[ $site_url ] ) ) {
+                $matched_sites[ $site_url ]    = $cid;
+                $matched_custs[ $cid ][]       = $site_url;
+            }
+        } // customers, overdue_ids, sites, matched_sites, matched_custs
 
         // Persistent lists & notes
         $ignore_sites = get_option( 'spm_ignore_sites',   [] );
@@ -145,6 +154,7 @@ class SPM_Admin_Dashboard_View {
             echo '</tbody></table>';
         } else {
             echo '<p><em>No unmatched websites (excluding internal).</em></p>';
+        } (excluding internal).</em></p>';
         }
 
         // 3) Internal Websites
