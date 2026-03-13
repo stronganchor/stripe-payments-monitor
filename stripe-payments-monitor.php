@@ -3,7 +3,7 @@
 Plugin Name: Stripe Payments Monitor
 Description: Revenue & subscription health report in MainWP. Duplicate customers merged; ignore lists; unlink & internal lists; hourly auto-refresh.
 Plugin URI:  https://github.com/stronganchor/stripe-payments-monitor/
-Version:     0.5.2
+Version:     0.5.3
 Update URI:  https://github.com/stronganchor/stripe-payments-monitor
 Author:      Strong Anchor Tech
 */
