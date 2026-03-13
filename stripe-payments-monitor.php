@@ -2,7 +2,9 @@
 /*
 Plugin Name: Stripe Payments Monitor
 Description: Revenue & subscription health report in MainWP. Duplicate customers merged; ignore lists; unlink & internal lists; hourly auto-refresh.
-Version:     0.5.1
+Plugin URI:  https://github.com/stronganchor/stripe-payments-monitor/
+Version:     0.5.2
+Update URI:  https://github.com/stronganchor/stripe-payments-monitor
 Author:      Strong Anchor Tech
 */
 
@@ -28,6 +30,57 @@ if ( ! defined( 'SPM_OVERDUE_DAYS' ) ) {
 
 define( 'SPM_FILE', __FILE__ );
 define( 'SPM_DIR',  plugin_dir_path( __FILE__ ) );
+
+function spm_get_update_branch() {
+	$branch = 'main';
+
+	if ( defined( 'STRIPE_PAYMENTS_MONITOR_UPDATE_BRANCH' ) && is_string( STRIPE_PAYMENTS_MONITOR_UPDATE_BRANCH ) ) {
+		$override = trim( STRIPE_PAYMENTS_MONITOR_UPDATE_BRANCH );
+		if ( '' !== $override ) {
+			$branch = $override;
+		}
+	}
+
+	return (string) apply_filters( 'stripe_payments_monitor_update_branch', $branch );
+}
+
+function spm_bootstrap_update_checker() {
+	$checker_file = SPM_DIR . 'plugin-update-checker/plugin-update-checker.php';
+	if ( ! file_exists( $checker_file ) ) {
+		return;
+	}
+
+	require_once $checker_file;
+
+	if ( ! class_exists( '\YahnisElsts\PluginUpdateChecker\v5\PucFactory' ) ) {
+		return;
+	}
+
+	$repo_url = (string) apply_filters( 'stripe_payments_monitor_update_repository', 'https://github.com/stronganchor/stripe-payments-monitor' );
+	$slug     = dirname( plugin_basename( __FILE__ ) );
+
+	$update_checker = \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
+		$repo_url,
+		__FILE__,
+		$slug
+	);
+
+	$update_checker->setBranch( spm_get_update_branch() );
+
+	foreach ( array( 'STRIPE_PAYMENTS_MONITOR_GITHUB_TOKEN', 'STRONGANCHOR_GITHUB_TOKEN', 'ANCHOR_GITHUB_TOKEN' ) as $constant_name ) {
+		if ( ! defined( $constant_name ) || ! is_string( constant( $constant_name ) ) ) {
+			continue;
+		}
+
+		$token = trim( (string) constant( $constant_name ) );
+		if ( '' !== $token ) {
+			$update_checker->setAuthentication( $token );
+			break;
+		}
+	}
+}
+
+spm_bootstrap_update_checker();
 
 autoload_stripe_payments_monitor();
 
