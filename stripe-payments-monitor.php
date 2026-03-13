@@ -2,7 +2,7 @@
 /*
 Plugin Name: Stripe Payments Monitor
 Description: Revenue & subscription health report in MainWP. Duplicate customers merged; ignore lists; unlink & internal lists; hourly auto-refresh.
-Version:     0.5.0
+Version:     0.5.1
 Author:      Strong Anchor Tech
 */
 
@@ -72,5 +72,16 @@ add_action( 'admin_head', function () {
 		form button.button-link{background:none;border:none;color:#2271b1;cursor:pointer;padding:0;margin:0}
 		form button.button-link:hover{text-decoration:underline}
 		em{color:#666}
+		.spm-dashboard-actions{display:flex;align-items:center;gap:12px;margin:16px 0}
+		.spm-dashboard-progress{margin:0 0 18px;padding:14px 16px;border:1px solid #dcdcde;border-radius:8px;background:#fff}
+		.spm-dashboard-progress.is-loading{border-color:#72aee6}
+		.spm-dashboard-progress.is-complete{border-color:#00a32a}
+		.spm-dashboard-progress.is-error{border-color:#d63638}
+		.spm-dashboard-progress-bar{height:10px;border-radius:999px;background:#f0f0f1;overflow:hidden}
+		.spm-dashboard-progress-fill{display:block;height:100%;width:0;background:linear-gradient(90deg,#2271b1,#72aee6);transition:width .2s ease}
+		.spm-dashboard-progress-meta{margin-top:10px;font-size:13px}
+		.spm-dashboard-progress-error{margin-top:10px;color:#d63638}
+		.spm-dashboard-progress-error.is-hidden{display:none}
+		.spm-dashboard-results-shell h2{margin-top:24px}
 	</style>';
 } );
