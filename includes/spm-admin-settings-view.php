@@ -57,7 +57,7 @@ class SPM_Admin_Settings_View {
 		echo '<table class="form-table">';
 		echo '<tr>';
 		echo '<th scope="row"><label for="spm_secret_key">Stripe <code>sk_live_...</code> Secret Key</label></th>';
-		echo '<td><input type="text" id="spm_secret_key" name="spm_secret_key" class="regular-text" value="' . esc_attr( $key ) . '" autocomplete="off" required></td>';
+		echo '<td><input type="password" id="spm_secret_key" name="spm_secret_key" class="regular-text" value="' . esc_attr( $key ) . '" autocomplete="off" required></td>';
 		echo '</tr>';
 		echo '</table>';
 		echo '<p class="submit">';
