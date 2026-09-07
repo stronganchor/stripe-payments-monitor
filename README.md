@@ -62,7 +62,7 @@ Mailbox authentication and scheduling the external reviewer are deployment tasks
 
 All administrator forms require `manage_options` and a WordPress nonce. REST routes also require `manage_options` through normal authenticated WordPress access, and their responses are private and noncacheable. No unauthenticated report or general-purpose provider proxy is exposed.
 
-A reviewer using a signed-in administrator browser can click **View report JSON** beside **Connections & settings**. This opens the current report directly in the browser through `admin-post.php?action=spm_monitor_report`, protected by the administrator capability and its own `spm_monitor_report` nonce. Read the current dashboard link each run; do not save its expiring nonce URL in a recurring task. This read-only route does not require a separate REST cookie nonce and does not refresh providers or change review state.
+A reviewer using a signed-in administrator browser can click **View report JSON** beside **Connections & settings**. This opens an HTML view through `admin.php?page=stripe-payments-monitor&spm_report=1`, protected by the administrator capability and its own `spm_monitor_report` nonce. Read the JSON from the text content of `#spm-report-json`; the entire report is escaped inside this single element. Read the current dashboard link each run; do not save its expiring nonce URL in a recurring task. This read-only route does not require a separate REST cookie nonce and does not refresh providers or change review state. The raw `admin-post.php?action=spm_monitor_report` JSON endpoint remains available to clients with the same administrator session and report nonce.
 
 | Interface | Purpose |
 | --- | --- |
@@ -132,6 +132,7 @@ php tests/moonclerk-source-test.php
 php tests/monitor-test.php
 php tests/monitor-actions-test.php
 php tests/monitor-report-test.php
+php tests/monitor-html-report-test.php
 ```
 
 Also lint changed PHP files and run `git diff --check`. A live release still needs target-specific verification of authenticated rendering, anonymous access denial, real provider permissions, source completeness, scheduled execution, and rollback readiness.

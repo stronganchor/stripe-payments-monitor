@@ -234,6 +234,15 @@ action_check( false === strpos( $settings_html, $stripe_key ) && false === strpo
 ob_start(); SPM_Monitor_Admin::render(); $report_html = ob_get_clean();
 action_check( false === strpos( $report_html, $stripe_key ) && false === strpos( $report_html, $moon_key ), 'report HTML does not expose configured credentials' );
 action_check( false !== strpos( $report_html, 'Test reviewer' ), 'report HTML test renders persisted note authors' );
+action_check( false !== strpos( $report_html, 'spm_report=1&amp;_wpnonce=test-nonce' ) && false === strpos( $report_html, 'action=spm_monitor_report' ), 'the browser report link uses the HTML admin view with its nonce' );
+
+// A zero-valued MDM expectation represents a variable total, without changing its stored amount.
+$state = fixture();
+$state['records']['check:one']['source'] = 'mdm_remittance';
+$state['records']['check:one']['amount_cents'] = 0;
+save_state( $state );
+ob_start(); SPM_Monitor_Admin::render(); $report_html = ob_get_clean();
+action_check( false !== strpos( $report_html, '<div class="spm-record-amount"><strong>Variable / review</strong>' ) && 0 === SPM_Monitor::state()['records']['check:one']['amount_cents'], 'zero MDM expectation displays as variable without inferring a paid or due amount' );
 
 // A key change invalidates cached evidence; an old in-flight refresh cannot undo that.
 $state = fixture();

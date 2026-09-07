@@ -3,7 +3,7 @@
 Plugin Name: Stripe Payments Monitor
 Description: Private revenue monitoring for Stripe, MoonClerk, checks and MDM remittances, with durable expectations, evidence and follow-up decisions.
 Plugin URI:  https://github.com/stronganchor/stripe-payments-monitor/
-Version:     0.6.1
+Version:     0.6.2
 Update URI:  https://github.com/stronganchor/stripe-payments-monitor
 Author:      Strong Anchor Tech
 */
@@ -123,7 +123,7 @@ require_once SPM_DIR . 'includes/monitor-admin.php';
 
 add_action( 'admin_enqueue_scripts', static function( $hook ) {
     if ( false !== strpos( $hook, 'stripe-payments-monitor' ) ) {
-        wp_enqueue_style( 'spm-monitor', plugins_url( 'assets/monitor.css', SPM_FILE ), [], '0.6.1' );
+        wp_enqueue_style( 'spm-monitor', plugins_url( 'assets/monitor.css', SPM_FILE ), [], '0.6.2' );
     }
 } );
 

@@ -225,7 +225,7 @@ cat >"$BACKUP/runtime-after.php" <<'PHP'
 require_once ABSPATH . 'wp-admin/includes/plugin.php';
 $before = json_decode(file_get_contents(getenv('SPM_BACKUP_DIR') . '/runtime-before.json'), true, 512, JSON_THROW_ON_ERROR);
 $plugin = get_plugin_data(WP_PLUGIN_DIR . '/stripe-payments-monitor/stripe-payments-monitor.php', false, false);
-if (get_option('home') !== $before['home'] || !is_plugin_active('stripe-payments-monitor/stripe-payments-monitor.php') || $plugin['Version'] !== '0.6.1') { WP_CLI::error('Home, activation, or version readback failed.'); }
+if (get_option('home') !== $before['home'] || !is_plugin_active('stripe-payments-monitor/stripe-payments-monitor.php') || $plugin['Version'] !== '0.6.2') { WP_CLI::error('Home, activation, or version readback failed.'); }
 if (!class_exists('SPM_Monitor') || !class_exists('SPM_Monitor_Actions') || !class_exists('SPM_Monitor_Admin') || !class_exists('SPM_Stripe_Source') || !class_exists('SPM_MoonClerk_Source')) { WP_CLI::error('Monitor runtime classes did not load.'); }
 if (!is_array(SPM_Monitor::report()) || spm_get_update_branch() !== 'dev') { WP_CLI::error('Report or effective update-branch readback failed.'); }
 echo json_encode(['home' => get_option('home'), 'version' => $plugin['Version'], 'active' => true, 'update_branch' => spm_get_update_branch(), 'runtime' => 'ok'], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
@@ -274,7 +274,7 @@ kill -0 "$GUARD_PID" 2>/dev/null || die 'Monitor deployment guard expired before
 remove_owned_marker || die 'Owned maintenance marker could not be verified and removed.'
 COMPLETED=1
 release_guard
-printf 'Deployment verified: Stripe Payments Monitor 0.6.1; update branch dev.\n'
+printf 'Deployment verified: Stripe Payments Monitor 0.6.2; update branch dev.\n'
 printf 'Source commit: %s\n' "$COMMIT"
 printf 'Live manifest SHA-256: %s\n' "$(sha256sum -- "$BACKUP/live-tree.sha256" | cut -d ' ' -f 1)"
 printf 'Private rollback/evidence directory: %s\n' "$BACKUP"

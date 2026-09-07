@@ -269,6 +269,7 @@ class SPM_Monitor_Admin {
         self::badge( $record['category'] ?? 'other' );
         self::badge( $record['expected'] ?? 'review' );
         $amount = array_key_exists( 'amount_cents', $record ) ? $record['amount_cents'] : null;
+        if ( 'mdm_remittance' === ( $record['source'] ?? '' ) && 0 === $amount ) { $amount = null; }
         echo '</div></div><div class="spm-record-amount"><strong>' . esc_html( self::money( $amount, $record['currency'] ?? '' ) ) . '</strong>';
         $schedule = ! empty( $record['interval'] ) ? 'Every ' . max( 1, (int) ( $record['interval_count'] ?? 1 ) ) . ' ' . $record['interval'] . ( (int) ( $record['interval_count'] ?? 1 ) > 1 ? 's' : '' ) : ( 'stripe_invoice' === ( $record['source'] ?? '' ) ? 'Individual invoice' : 'Schedule varies' );
         echo '<span>' . esc_html( $schedule ) . '</span></div></div>';
@@ -337,6 +338,11 @@ class SPM_Monitor_Admin {
 
     public static function render() {
         self::guard();
+        if ( isset( $_GET['spm_report'] ) && '1' === $_GET['spm_report'] ) {
+            check_admin_referer( 'spm_monitor_report' );
+            echo '<div class="wrap spm-monitor"><h1>Payments Monitor report JSON</h1><p><a class="button" href="' . esc_url( self::url() ) . '">Back to Payments Monitor</a></p><pre id="spm-report-json" style="white-space:pre-wrap;overflow-wrap:anywhere">' . esc_html( wp_json_encode( SPM_Monitor::report(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) ) . '</pre></div>';
+            return;
+        }
         $report = SPM_Monitor::report();
         $records = is_array( $report['records'] ?? null ) ? $report['records'] : array();
         $issues = is_array( $report['issues'] ?? null ) ? $report['issues'] : array();
@@ -351,7 +357,7 @@ class SPM_Monitor_Admin {
         $historical_groups = self::issue_groups( $historical, $records );
         $active = count( array_filter( $records, static function( $record ) { return 'active' === ( $record['expected'] ?? '' ); } ) );
         $selected_issue = isset( $_GET['spm_issue'] ) && is_string( $_GET['spm_issue'] ) ? sanitize_text_field( wp_unslash( $_GET['spm_issue'] ) ) : '';
-        echo '<div class="wrap spm-monitor"><div class="spm-page-heading"><div><h1>Payments Monitor</h1><p>Expected income, payment evidence and follow-ups in one place.</p></div><div class="spm-page-actions"><a class="button" href="' . esc_url( self::url( 'stripe-payments-monitor-settings' ) ) . '">Connections &amp; settings</a><a class="button" href="' . esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=spm_monitor_report' ), 'spm_monitor_report' ) ) . '">View report JSON</a>';
+        echo '<div class="wrap spm-monitor"><div class="spm-page-heading"><div><h1>Payments Monitor</h1><p>Expected income, payment evidence and follow-ups in one place.</p></div><div class="spm-page-actions"><a class="button" href="' . esc_url( self::url( 'stripe-payments-monitor-settings' ) ) . '">Connections &amp; settings</a><a class="button" href="' . esc_url( wp_nonce_url( self::url( 'stripe-payments-monitor', array( 'spm_report' => '1' ) ), 'spm_monitor_report' ) ) . '">View report JSON</a>';
         self::form( 'refresh', array( 'source' => 'all' ), 'spm-inline-form' );
         echo '<button type="submit" class="button button-primary">Refresh payment sources</button></form></div></div>';
         if ( isset( $_GET['spm_saved'] ) ) { echo '<div class="notice notice-success"><p>Request processed. Source refresh results appear in the freshness panel below.</p></div>'; }
