@@ -219,6 +219,78 @@ SPM_Monitor::merge_snapshot( $state, 'moonclerk', $snapshot );
 SPM_Monitor::reconcile_state( $state, 'moonclerk', $snapshot, $now );
 monitor_check( 0 === count( monitor_issues( $state, 'period_unverified', 'open' ) ), 'A current successful MoonClerk payment should clear the unverified-period flag.' );
 
+// Recent ACH/processing attempts are not failed payments; exact invoice identity is required.
+foreach ( array( array( 'stripe:in_processing', 'in_processing' ), array( 'in_processing', 'stripe:in_processing' ) ) as $ids ) {
+	$state = monitor_empty_state();
+	$invoice = monitor_invoice( array( 'id' => $ids[0], 'created' => $now - 3 * DAY_IN_SECONDS, 'due_at' => $now - DAY_IN_SECONDS ) );
+	$pending = monitor_payment( 'stripe', array( 'id' => 'stripe:py_processing', 'status' => 'pending', 'created' => $now - 3 * DAY_IN_SECONDS, 'paid_at' => 0, 'captured_cents' => 0, 'invoice_refs' => array( $ids[1] ) ) );
+	$snapshot = monitor_snapshot( array( monitor_record() ), array( $invoice ), array( $pending ) );
+	SPM_Monitor::merge_snapshot( $state, 'stripe', $snapshot );
+	SPM_Monitor::reconcile_state( $state, 'stripe', $snapshot, $now );
+	monitor_check( 0 === count( monitor_issues( $state, 'invoice', 'open' ) ) && 0 === count( monitor_issues( $state, 'invoice_pending', 'open' ) ), 'Fresh exact pending attempt suppresses premature failure/overdue alarm for ' . $ids[0] . '.' );
+	monitor_check( 0 === $state['records']['stripe:plan1']['last_paid'], 'Pending ACH remains unpaid evidence despite suppression of premature alarm.' );
+	$snapshot['payments'][0]['created'] = $now - 8 * DAY_IN_SECONDS;
+	SPM_Monitor::reconcile_state( $state, 'stripe', $snapshot, $now );
+	$id = monitor_first_issue_id( $state, 'invoice_pending', 'open' );
+	monitor_check( $id && 'review' === $state['issues'][ $id ]['severity'] && $invoice['created'] === $state['issues'][ $id ]['occurred_at'], 'Stale processing creates a dated review condition without calling it paid or failed.' );
+}
+
+$state = monitor_empty_state();
+$invoice = monitor_invoice( array( 'id' => 'stripe:in_retry', 'created' => $now - 4 * DAY_IN_SECONDS ) );
+$pending = monitor_payment( 'stripe', array( 'id' => 'stripe:py_pending', 'status' => 'pending', 'created' => $now - 2 * DAY_IN_SECONDS, 'paid_at' => 0, 'captured_cents' => 0, 'invoice_refs' => array( 'in_retry' ) ) );
+$failure = monitor_payment( 'stripe', array( 'id' => 'stripe:py_failed', 'status' => 'failed', 'created' => $now - DAY_IN_SECONDS, 'paid_at' => 0, 'captured_cents' => 0, 'invoice_refs' => array( 'stripe:in_retry' ) ) );
+$snapshot = monitor_snapshot( array( monitor_record() ), array( $invoice ), array( $pending, $failure ) );
+SPM_Monitor::merge_snapshot( $state, 'stripe', $snapshot );
+SPM_Monitor::reconcile_state( $state, 'stripe', $snapshot, $now );
+$id = monitor_first_issue_id( $state, 'invoice', 'open' );
+monitor_check( $id && 'action' === $state['issues'][ $id ]['severity'], 'Newer failed attempt beats older pending receipt for the same invoice.' );
+$snapshot['payments'][0]['created'] = $now - HOUR_IN_SECONDS;
+SPM_Monitor::reconcile_state( $state, 'stripe', $snapshot, $now );
+monitor_check( 0 === count( monitor_issues( $state, 'invoice', 'open' ) ), 'Newer pending retry suppresses the older failed-attempt alarm.' );
+$snapshot['payments'][1]['created'] = $snapshot['payments'][0]['created'];
+SPM_Monitor::reconcile_state( $state, 'stripe', $snapshot, $now );
+monitor_check( 1 === count( monitor_issues( $state, 'invoice', 'open' ) ), 'When attempt timestamps tie, a failed result cannot be hidden by pending.' );
+foreach ( array(
+	array( 'invoice_refs' => array( 'in_unrelated' ) ),
+	array( 'invoice_refs' => array() ),
+	array( 'created' => 0, 'paid_at' => 0 ),
+	array( 'amount_cents' => 1000 ),
+	array( 'currency' => 'eur' ),
+	array( 'source' => 'moonclerk' ),
+) as $overrides ) {
+	$snapshot['payments'] = array( array_replace( $pending, $overrides ) );
+	SPM_Monitor::reconcile_state( $state, 'stripe', $snapshot, $now );
+	monitor_check( 1 === count( monitor_issues( $state, 'invoice', 'open' ) ), 'Unrelated, undated, partial, wrong-currency or wrong-source pending evidence must not hide this invoice balance.' );
+}
+$snapshot['payments'] = array( array_replace( $pending, array( 'created' => $now - 8 * DAY_IN_SECONDS ) ) );
+$snapshot['invoices'][0]['attempted'] = false; $snapshot['invoices'][0]['attempt_count'] = 0; $snapshot['invoices'][0]['due_at'] = 0;
+SPM_Monitor::reconcile_state( $state, 'stripe', $snapshot, $now );
+monitor_check( 1 === count( monitor_issues( $state, 'invoice_pending', 'open' ) ), 'Stale exact pending evidence needs review even if the invoice attempted flag is absent.' );
+
+// Old balances and baseline/manual expectations remain visible as review, not immediate client actions.
+foreach ( array(
+	array( 'label' => 'recent expected subscription', 'days' => 20, 'expected' => 'active', 'source' => 'stripe', 'severity' => 'action' ),
+	array( 'label' => 'historical balance', 'days' => 61, 'expected' => 'active', 'source' => 'stripe', 'severity' => 'review' ),
+	array( 'label' => 'unconfirmed baseline', 'days' => 20, 'expected' => 'review', 'source' => 'stripe', 'severity' => 'review' ),
+	array( 'label' => 'ended relationship', 'days' => 20, 'expected' => 'ended', 'source' => 'stripe', 'severity' => 'review' ),
+	array( 'label' => 'manual check relationship', 'days' => 20, 'expected' => 'active', 'source' => 'check', 'severity' => 'review' ),
+) as $case ) {
+	$state = monitor_empty_state();
+	$record = monitor_record( 'stripe', array( 'expected' => $case['expected'], 'source' => $case['source'] ) );
+	$state['records'][ $record['id'] ] = $record;
+	$invoice = monitor_invoice( array( 'created' => $now - $case['days'] * DAY_IN_SECONDS ) );
+	$snapshot = monitor_snapshot( array(), array( $invoice ) );
+	SPM_Monitor::reconcile_state( $state, 'stripe', $snapshot, $now );
+	$id = monitor_first_issue_id( $state, 'invoice', 'open' );
+	monitor_check( $id && $case['severity'] === $state['issues'][ $id ]['severity'] && $invoice['created'] === $state['issues'][ $id ]['occurred_at'], $case['label'] . ' must retain its historical timestamp and correct priority.' );
+}
+$state = monitor_empty_state();
+$snapshot = monitor_snapshot( array( monitor_record( 'stripe', array( 'status' => 'past_due' ) ) ) );
+SPM_Monitor::merge_snapshot( $state, 'stripe', $snapshot );
+SPM_Monitor::reconcile_state( $state, 'stripe', $snapshot, $now );
+$id = monitor_first_issue_id( $state, 'plan_status', 'open' );
+monitor_check( $id && $snapshot['records'][0]['current_period_start'] === $state['issues'][ $id ]['occurred_at'], 'Plan status issues expose the billing-period occurrence date.' );
+
 // Refunds/disputes attach to exact receipts and subscriptions, never customer similarity.
 foreach ( array( 'stripe', 'moonclerk' ) as $source ) {
 	$state = monitor_empty_state();
@@ -290,6 +362,8 @@ $snapshot = monitor_snapshot( array( monitor_record() ), array( $draft ) );
 SPM_Monitor::merge_snapshot( $state, 'stripe', $snapshot );
 SPM_Monitor::reconcile_state( $state, 'stripe', $snapshot, $now );
 monitor_check( 1 === count( monitor_issues( $state, 'invoice_draft', 'open' ) ) && 0 === count( monitor_issues( $state, 'invoice_missing', 'open' ) ), 'Current invoice still draft beyond grace is flagged even though invoice existence is known.' );
+$draft_id = monitor_first_issue_id( $state, 'invoice_draft', 'open' );
+monitor_check( $draft_id && $draft['created'] === $state['issues'][ $draft_id ]['occurred_at'], 'Draft issue keeps the invoice creation date for historical grouping.' );
 $snapshot['invoices'][0]['created'] = $now - DAY_IN_SECONDS;
 SPM_Monitor::reconcile_state( $state, 'stripe', $snapshot, $now );
 monitor_check( 0 === count( monitor_issues( $state, 'invoice_draft', 'open' ) ), 'A newly created draft gets its own grace period.' );

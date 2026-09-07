@@ -125,11 +125,34 @@ class SPM_Monitor {
         return array_replace( [ 'id' => $id, 'record_id' => $record['id'], 'source' => $record['source'], 'kind' => $kind, 'title' => $title, 'detail' => $detail, 'severity' => 'review', 'amount_cents' => $record['amount_cents'] ?? 0, 'currency' => $record['currency'] ?? 'usd', 'evidence' => empty( $record['url'] ) ? [] : [ [ 'url' => $record['url'], 'note' => 'Source record' ] ], 'identity' => $identity ], $extra );
     }
 
+    private static function stripe_invoice_ref( $value ) {
+        if ( ! is_string( $value ) ) { return ''; }
+        return 0 === strpos( $value, 'stripe:' ) ? substr( $value, 7 ) : $value;
+    }
+
     public static function reconcile_state( &$state, $source, $snapshot, $now = null ) {
         $now = $now ?? time();
         $candidates = [];
         $invoices = $snapshot['invoices'] ?? [];
         $invoice_records = [];
+        $latest_invoice_attempts = [];
+        if ( 'stripe' === $source ) {
+            foreach ( $snapshot['payments'] ?? [] as $payment ) {
+                if ( isset( $payment['source'] ) && 'stripe' !== $payment['source'] ) { continue; }
+                $created = (int) ( $payment['created'] ?? $payment['paid_at'] ?? 0 );
+                if ( $created <= 0 || $created > $now + DAY_IN_SECONDS ) { continue; }
+                foreach ( $payment['invoice_refs'] ?? [] as $reference ) {
+                    $reference = self::stripe_invoice_ref( $reference );
+                    if ( '' === $reference ) { continue; }
+                    $prior = $latest_invoice_attempts[ $reference ] ?? null;
+                    // A newer failure must not be hidden by an older pending retry.
+                    // With equal timestamps, a terminal result beats pending.
+                    if ( ! $prior || $created > $prior['created'] || ( $created === $prior['created'] && 'pending' === ( $prior['payment']['status'] ?? '' ) && 'pending' !== ( $payment['status'] ?? '' ) ) ) {
+                        $latest_invoice_attempts[ $reference ] = [ 'created' => $created, 'payment' => $payment ];
+                    }
+                }
+            }
+        }
         foreach ( $invoices as $invoice ) {
             $rid = $invoice['record_id'] ?? '';
             if ( $rid ) { $invoice_records[ $rid ][] = $invoice; }
@@ -143,13 +166,16 @@ class SPM_Monitor {
                 $current = $invoice_end > $start && ( ! $invoice_start || $invoice_start <= $start );
                 if ( ! $invoice_end ) { $current = $created >= $start - DAY_IN_SECONDS; }
                 if ( 'active' === ( $record['expected'] ?? '' ) && 'active' === ( $record['status'] ?? '' ) && $start > 0 && $created > 0 && $current && max( $start, $created ) + $grace < $now ) {
-                    $candidates[] = self::candidate( $record, 'invoice_draft', 'Current invoice is still a draft', 'The invoice for this expected billing period is still a draft after the agreement grace period. Review finalization and collection settings; a draft does not prove payment.', $invoice['id'], [ 'source' => $source, 'amount_cents' => (int) ( $invoice['amount_remaining'] ?? 0 ), 'currency' => $invoice['currency'] ?? $record['currency'], 'evidence' => [ [ 'url' => $invoice['url'] ?? '', 'note' => 'Draft invoice' ] ] ] );
+                    $candidates[] = self::candidate( $record, 'invoice_draft', 'Current invoice is still a draft', 'The invoice for this expected billing period is still a draft after the agreement grace period. Review finalization and collection settings; a draft does not prove payment.', $invoice['id'], [ 'source' => $source, 'occurred_at' => $created, 'amount_cents' => (int) ( $invoice['amount_remaining'] ?? 0 ), 'currency' => $invoice['currency'] ?? $record['currency'], 'evidence' => [ [ 'url' => $invoice['url'] ?? '', 'note' => 'Draft invoice' ] ] ] );
                 }
             }
             if ( (int) ( $invoice['amount_remaining'] ?? 0 ) <= 0 || ! in_array( $invoice['status'] ?? '', [ 'open', 'uncollectible' ], true ) ) { continue; }
             $failed = ! empty( $invoice['attempted'] ) || (int) ( $invoice['attempt_count'] ?? 0 ) > 0;
             $overdue = ! empty( $invoice['due_at'] ) && (int) $invoice['due_at'] < $now;
-            if ( ! $failed && ! $overdue && 'uncollectible' !== $invoice['status'] ) { continue; }
+            $attempt = $latest_invoice_attempts[ self::stripe_invoice_ref( $invoice['id'] ?? '' ) ] ?? null;
+            $pending = $attempt['payment'] ?? [];
+            $processing = 'open' === $invoice['status'] && 'pending' === ( $pending['status'] ?? '' ) && empty( $pending['disputed'] ) && strtolower( (string) ( $pending['currency'] ?? '' ) ) === strtolower( (string) ( $invoice['currency'] ?? '' ) ) && (int) ( $pending['amount_cents'] ?? 0 ) >= (int) $invoice['amount_remaining'];
+            if ( ! $failed && ! $overdue && 'uncollectible' !== $invoice['status'] && ! $processing ) { continue; }
             if ( ! isset( $state['records'][ $rid ] ) ) {
                 // One-off invoices remain separate from that customer's subscriptions.
                 $rid = 'stripe:invoice:' . $invoice['id'];
@@ -158,10 +184,19 @@ class SPM_Monitor {
                 }
             }
             $record = $state['records'][ $rid ];
+            if ( $processing ) {
+                $grace_days = 'stripe_invoice' === ( $record['source'] ?? '' ) ? 7 : max( 0, (int) ( $record['grace_days'] ?? 7 ) );
+                if ( $attempt['created'] + $grace_days * DAY_IN_SECONDS < $now ) {
+                    $candidates[] = self::candidate( $record, 'invoice_pending', 'Invoice payment is still processing', 'The latest payment linked to this invoice is still pending beyond the agreement grace period. Verify settlement with Stripe; it has not been counted as paid.', $invoice['id'], [ 'source' => $source, 'occurred_at' => (int) ( $invoice['created'] ?? 0 ), 'amount_cents' => (int) $invoice['amount_remaining'], 'currency' => $invoice['currency'], 'evidence' => [ [ 'url' => $invoice['url'] ?? '', 'note' => 'Invoice' ], [ 'url' => $pending['url'] ?? '', 'note' => 'Pending payment' ] ] ] );
+                }
+                continue;
+            }
             $title = $failed ? 'Invoice payment needs attention' : 'Outstanding invoice needs review';
             $detail = 'Invoice ' . $invoice['id'] . ' is ' . $invoice['status'] . ' with a remaining balance.';
             if ( ! empty( $invoice['next_payment_attempt'] ) ) { $detail .= ' Next retry: ' . gmdate( 'Y-m-d H:i', (int) $invoice['next_payment_attempt'] ) . ' UTC.'; }
-            $candidates[] = self::candidate( $record, 'invoice', $title, $detail, $invoice['id'], [ 'source' => 'stripe', 'amount_cents' => (int) $invoice['amount_remaining'], 'currency' => $invoice['currency'], 'severity' => 'uncollectible' === $invoice['status'] ? 'review' : 'action', 'evidence' => [ [ 'url' => $invoice['url'] ?? '', 'note' => 'Invoice' ] ] ] );
+            $created = (int) ( $invoice['created'] ?? 0 );
+            $action = 'uncollectible' !== $invoice['status'] && 'active' === ( $record['expected'] ?? '' ) && 'stripe' === ( $record['source'] ?? '' ) && $created >= $now - 60 * DAY_IN_SECONDS && $created <= $now + DAY_IN_SECONDS;
+            $candidates[] = self::candidate( $record, 'invoice', $title, $detail, $invoice['id'], [ 'source' => 'stripe', 'occurred_at' => $created, 'amount_cents' => (int) $invoice['amount_remaining'], 'currency' => $invoice['currency'], 'severity' => $action ? 'action' : 'review', 'evidence' => [ [ 'url' => $invoice['url'] ?? '', 'note' => 'Invoice' ] ] ] );
         }
         $observed_payments = [];
         $allocations = [];
@@ -218,7 +253,7 @@ class SPM_Monitor {
                 $candidates[] = self::candidate( $record, 'scheduled_end', 'Subscription is scheduled to end', 'Confirm whether the scheduled cancellation is intentional.', (string) ( $record['current_period_end'] ?? 0 ), [ 'severity' => 'action' ] );
             }
             if ( in_array( $record['status'] ?? '', [ 'past_due', 'unpaid', 'incomplete', 'paused', 'pending' ], true ) || ! empty( $record['collection_paused'] ) ) {
-                $candidates[] = self::candidate( $record, 'plan_status', 'Payment plan needs attention', 'Provider status: ' . ( $record['status'] ?? 'unknown' ) . ( ! empty( $record['collection_paused'] ) ? '; payment collection is paused.' : '.' ), (string) ( $record['current_period_start'] ?? 0 ), [ 'severity' => 'action', 'semantic_status' => ( $record['status'] ?? '' ) . ':' . (int) ! empty( $record['collection_paused'] ) ] );
+                $candidates[] = self::candidate( $record, 'plan_status', 'Payment plan needs attention', 'Provider status: ' . ( $record['status'] ?? 'unknown' ) . ( ! empty( $record['collection_paused'] ) ? '; payment collection is paused.' : '.' ), (string) ( $record['current_period_start'] ?? 0 ), [ 'severity' => 'action', 'occurred_at' => (int) ( $record['current_period_start'] ?? 0 ), 'semantic_status' => ( $record['status'] ?? '' ) . ':' . (int) ! empty( $record['collection_paused'] ) ] );
             }
             if ( ! empty( $record['mixed_schedule'] ) ) {
                 $candidates[] = self::candidate( $record, 'schedule_review', 'Review a subscription with multiple billing schedules', $record['schedule_note'] ?? 'Check the individual subscription items; no single amount or renewal date has been assumed.' );

@@ -62,8 +62,11 @@ Mailbox authentication and scheduling the external reviewer are deployment tasks
 
 All administrator forms require `manage_options` and a WordPress nonce. REST routes also require `manage_options` through normal authenticated WordPress access, and their responses are private and noncacheable. No unauthenticated report or general-purpose provider proxy is exposed.
 
+A reviewer using a signed-in administrator browser can click **View report JSON** beside **Connections & settings**. This opens the current report directly in the browser through `admin-post.php?action=spm_monitor_report`, protected by the administrator capability and its own `spm_monitor_report` nonce. Read the current dashboard link each run; do not save its expiring nonce URL in a recurring task. This read-only route does not require a separate REST cookie nonce and does not refresh providers or change review state.
+
 | Interface | Purpose |
 | --- | --- |
+| Dashboard **View report JSON** link | Read the structured report in a signed-in browser using the current nonce |
 | `GET /wp-json/spm/v1/report` | Read agreements, issues, evidence, and source health |
 | `POST /wp-json/spm/v1/review` | Submit supported review operations |
 | `wp spm report` | Print the report as JSON |
@@ -128,6 +131,7 @@ php tests/stripe-source-test.php
 php tests/moonclerk-source-test.php
 php tests/monitor-test.php
 php tests/monitor-actions-test.php
+php tests/monitor-report-test.php
 ```
 
 Also lint changed PHP files and run `git diff --check`. A live release still needs target-specific verification of authenticated rendering, anonymous access denial, real provider permissions, source completeness, scheduled execution, and rollback readiness.

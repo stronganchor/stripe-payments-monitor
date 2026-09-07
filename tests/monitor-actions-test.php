@@ -56,6 +56,7 @@ function nocache_headers() {}
 function admin_url( $path ) { return 'https://dashboard.example.invalid/wp-admin/' . $path; }
 function add_query_arg( $args, $url ) { return $url . '?' . http_build_query( $args ); }
 function wp_create_nonce( $action ) { return 'test-nonce'; }
+function wp_nonce_url( $url, $action ) { return $url . '&_wpnonce=' . wp_create_nonce( $action ); }
 function selected( $value, $expected, $echo = true ) { return (string) $value === (string) $expected ? ' selected="selected"' : ''; }
 function wp_date( $format, $timestamp ) { return gmdate( $format, $timestamp ); }
 function number_format_i18n( $amount, $places = 0 ) { return number_format( $amount, $places ); }

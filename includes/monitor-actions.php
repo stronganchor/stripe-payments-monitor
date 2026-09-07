@@ -182,6 +182,14 @@ class SPM_Monitor_Actions {
     }
 }
 
+// A signed-in browser can follow the dashboard nonce link without REST nonce setup.
+add_action( 'admin_post_spm_monitor_report', static function() {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_die( 'You cannot view the Payments Monitor.', '', [ 'response' => 403 ] ); }
+    check_admin_referer( 'spm_monitor_report' );
+    nocache_headers();
+    wp_send_json( SPM_Monitor::report(), 200, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
+} );
+
 add_action( 'admin_post_spm_monitor_action', static function() {
     if ( ! current_user_can( 'manage_options' ) ) { wp_die( 'You cannot manage the Payments Monitor.', '', [ 'response' => 403 ] ); }
     check_admin_referer( 'spm_monitor_action' );

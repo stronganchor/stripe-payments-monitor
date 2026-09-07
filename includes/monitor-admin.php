@@ -143,6 +143,68 @@ class SPM_Monitor_Admin {
         echo '</div><p class="spm-meta">A failed or stale source cannot confirm that everything is paid. Dates use the WordPress site timezone.</p></section>';
     }
 
+    private static function historical_issue( $issue, $now ) {
+        // A reviewer's due follow-up takes priority over historical categorization.
+        if ( ! empty( $issue['follow_up_at'] ) && (int) $issue['follow_up_at'] <= $now ) { return false; }
+        if ( 'baseline' === ( $issue['kind'] ?? '' ) ) { return true; }
+        // A newly imported issue can describe an old invoice. Unknown dates stay visible.
+        $occurred = (int) ( $issue['occurred_at'] ?? 0 );
+        return 'invoice' === ( $issue['kind'] ?? '' ) && $occurred > 0 && $occurred < $now - 60 * DAY_IN_SECONDS;
+    }
+
+    private static function issue_groups( $issues, $records ) {
+        $groups = array();
+        foreach ( $issues as $issue ) {
+            $rid = (string) ( $issue['record_id'] ?? '' );
+            $record = $records[ $rid ] ?? array();
+            $source = (string) ( $record['source'] ?? $issue['source'] ?? 'manual' );
+            if ( in_array( $source, array( 'stripe_invoice', 'stripe_payment' ), true ) ) { $source = 'stripe'; }
+            if ( 'moonclerk_payment' === $source ) { $source = 'moonclerk'; }
+            $customer = (string) ( $record['customer_ref'] ?? '' );
+            // Provider customer identity groups multiple agreements without matching names.
+            // Keep manual remittances and donor payments in their own source groups.
+            $key = $source . '|' . ( $customer ? 'customer:' . $customer : 'record:' . ( $rid ?: $issue['id'] ) );
+            if ( ! isset( $groups[ $key ] ) ) {
+                $groups[ $key ] = array( 'name' => $record['name'] ?? 'Unlinked issue', 'source' => $source, 'issues' => array(), 'records' => array(), 'priority' => 1, 'latest' => null, 'latest_at' => 0 );
+            }
+            $group =& $groups[ $key ];
+            $group['issues'][] = $issue;
+            $group['records'][ $rid ] = true;
+            if ( 'action' === ( $issue['severity'] ?? '' ) ) { $group['priority'] = 0; }
+            $occurred = (int) ( $issue['occurred_at'] ?? 0 );
+            if ( null === $group['latest'] || $occurred > $group['latest_at'] ) { $group['latest'] = $issue; $group['latest_at'] = $occurred; }
+            unset( $group );
+        }
+        uasort( $groups, static function( $a, $b ) {
+            return ( $a['priority'] <=> $b['priority'] ) ?: ( $b['latest_at'] <=> $a['latest_at'] ) ?: strcasecmp( $a['name'], $b['name'] );
+        } );
+        return $groups;
+    }
+
+    private static function client_issues( $groups, $records ) {
+        foreach ( $groups as $group ) {
+            $count = count( $group['issues'] );
+            $latest = $group['latest'];
+            echo '<details class="spm-client-group"><summary class="spm-client-summary"><span class="spm-client-label"><strong>' . esc_html( $group['name'] ) . '</strong><span class="spm-meta">' . esc_html( self::label( $group['source'] ) ) . ' · ' . (int) $count . ' issue' . ( 1 === $count ? '' : 's' );
+            if ( count( $group['records'] ) > 1 ) { echo ' across ' . (int) count( $group['records'] ) . ' agreements'; }
+            echo '</span><span class="spm-client-reason">' . esc_html( $latest['title'] ?? 'Review needed' ) . '</span></span><span class="spm-client-latest">';
+            if ( isset( $latest['amount_cents'] ) && $latest['amount_cents'] > 0 ) { echo '<strong>' . esc_html( self::money( $latest['amount_cents'], $latest['currency'] ?? '' ) ) . '</strong><span class="spm-meta">Latest issue amount</span>'; }
+            echo '<span class="spm-meta">' . ( $group['latest_at'] ? 'Most recent: ' . esc_html( self::date( $group['latest_at'] ) ) : 'Occurrence date not recorded' ) . '</span></span></summary><div class="spm-client-issues">';
+            usort( $group['issues'], static function( $a, $b ) { return ( (int) ( $b['occurred_at'] ?? 0 ) <=> (int) ( $a['occurred_at'] ?? 0 ) ) ?: ( (int) ( $b['first_seen'] ?? 0 ) <=> (int) ( $a['first_seen'] ?? 0 ) ); } );
+            foreach ( $group['issues'] as $issue ) {
+                $record = $records[ $issue['record_id'] ?? '' ] ?? array();
+                echo '<div class="spm-issue-row"><div class="spm-issue-row-main"><a href="' . esc_url( self::url( 'stripe-payments-monitor', array( 'spm_issue' => $issue['id'] ) ) . '#spm-selected-issue' ) . '">' . esc_html( $issue['title'] ?? 'Review issue' ) . '</a><p class="spm-meta">';
+                if ( count( $group['records'] ) > 1 ) { echo esc_html( $record['name'] ?? 'Agreement' ) . ' · '; }
+                echo ! empty( $issue['occurred_at'] ) ? esc_html( self::date( $issue['occurred_at'] ) ) : 'Occurrence date not recorded';
+                if ( ! empty( $issue['follow_up_at'] ) ) { echo ' · Follow up ' . esc_html( self::date( $issue['follow_up_at'], false, true ) ); }
+                echo '</p></div><div class="spm-issue-row-meta">';
+                if ( isset( $issue['amount_cents'] ) && $issue['amount_cents'] > 0 ) { echo '<strong>' . esc_html( self::money( $issue['amount_cents'], $issue['currency'] ?? '' ) ) . '</strong>'; }
+                echo '<div class="spm-badges">'; self::badge( $issue['severity'] ?? 'review' ); self::badge( $issue['status'] ?? 'open' ); echo '</div></div></div>';
+            }
+            echo '</div></details>';
+        }
+    }
+
     private static function issue_card( $issue, $records ) {
         $record = $records[ $issue['record_id'] ?? '' ] ?? array();
         $id = $issue['id'];
@@ -153,7 +215,9 @@ class SPM_Monitor_Admin {
         self::badge( $issue['status'] ?? 'open' );
         echo '</div></div><p>' . nl2br( esc_html( $issue['detail'] ?? '' ) ) . '</p>';
         if ( isset( $issue['amount_cents'] ) && $issue['amount_cents'] > 0 ) { echo '<p class="spm-amount">' . esc_html( self::money( $issue['amount_cents'], $issue['currency'] ?? 'usd' ) ) . '</p>'; }
-        echo '<p class="spm-meta">First seen ' . esc_html( self::date( $issue['first_seen'] ?? 0 ) ) . ' · Last observed ' . esc_html( self::date( $issue['last_seen'] ?? 0 ) );
+        echo '<p class="spm-meta">';
+        if ( ! empty( $issue['occurred_at'] ) ) { echo 'Occurred ' . esc_html( self::date( $issue['occurred_at'] ) ) . ' · '; }
+        echo 'First seen ' . esc_html( self::date( $issue['first_seen'] ?? 0 ) ) . ' · Last observed ' . esc_html( self::date( $issue['last_seen'] ?? 0 ) );
         if ( ! empty( $issue['follow_up_at'] ) ) { echo ' · Follow up ' . esc_html( self::date( $issue['follow_up_at'], false, true ) ); }
         echo '</p>';
         if ( ! empty( $issue['resolution'] ) ) { echo '<p class="spm-resolution"><strong>Review note:</strong> ' . nl2br( esc_html( $issue['resolution'] ) ) . '</p>'; }
@@ -281,20 +345,31 @@ class SPM_Monitor_Admin {
         $open = array_filter( $issues, function( $i ) { return 'open' === ( $i['status'] ?? 'open' ); } );
         $waiting = array_filter( $issues, function( $i ) { return in_array( $i['status'] ?? '', array( 'waiting', 'snoozed' ), true ); } );
         $resolved = array_filter( $issues, function( $i ) { return 'resolved' === ( $i['status'] ?? '' ); } );
-        $sort = function( $a, $b ) { $priority = array( 'action' => 0, 'review' => 1 ); return ( $priority[ $a['severity'] ?? 'review' ] ?? 1 ) <=> ( $priority[ $b['severity'] ?? 'review' ] ?? 1 ); };
-        uasort( $open, $sort );
-        echo '<div class="wrap spm-monitor"><div class="spm-page-heading"><div><h1>Payments Monitor</h1><p>Expected income, payment evidence and follow-ups in one place.</p></div><div class="spm-page-actions"><a class="button" href="' . esc_url( self::url( 'stripe-payments-monitor-settings' ) ) . '">Connections &amp; settings</a>';
+        $historical = array(); $current = array(); $now = time();
+        foreach ( $open as $id => $issue ) { if ( self::historical_issue( $issue, $now ) ) { $historical[ $id ] = $issue; } else { $current[ $id ] = $issue; } }
+        $current_groups = self::issue_groups( $current, $records );
+        $historical_groups = self::issue_groups( $historical, $records );
+        $active = count( array_filter( $records, static function( $record ) { return 'active' === ( $record['expected'] ?? '' ); } ) );
+        $selected_issue = isset( $_GET['spm_issue'] ) && is_string( $_GET['spm_issue'] ) ? sanitize_text_field( wp_unslash( $_GET['spm_issue'] ) ) : '';
+        echo '<div class="wrap spm-monitor"><div class="spm-page-heading"><div><h1>Payments Monitor</h1><p>Expected income, payment evidence and follow-ups in one place.</p></div><div class="spm-page-actions"><a class="button" href="' . esc_url( self::url( 'stripe-payments-monitor-settings' ) ) . '">Connections &amp; settings</a><a class="button" href="' . esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=spm_monitor_report' ), 'spm_monitor_report' ) ) . '">View report JSON</a>';
         self::form( 'refresh', array( 'source' => 'all' ), 'spm-inline-form' );
         echo '<button type="submit" class="button button-primary">Refresh payment sources</button></form></div></div>';
         if ( isset( $_GET['spm_saved'] ) ) { echo '<div class="notice notice-success"><p>Request processed. Source refresh results appear in the freshness panel below.</p></div>'; }
         if ( isset( $_GET['spm_notice'] ) && is_string( $_GET['spm_notice'] ) ) { echo '<div class="notice notice-info"><p>' . esc_html( sanitize_text_field( wp_unslash( $_GET['spm_notice'] ) ) ) . '</p></div>'; }
-        echo '<div class="spm-counts"><div><strong>' . (int) count( $open ) . '</strong><span>Open issues</span></div><div><strong>' . (int) count( $waiting ) . '</strong><span>Waiting or snoozed</span></div><div><strong>' . (int) count( $records ) . '</strong><span>Tracked agreements</span></div><div><strong>' . (int) count( $resolved ) . '</strong><span>Resolved issues</span></div></div>';
+        echo '<div class="spm-counts"><div><strong>' . (int) count( $current_groups ) . '</strong><span>Clients to review now · ' . (int) count( $current ) . ' issues</span></div><div><strong>' . (int) count( $historical ) . '</strong><span>Historical and baseline issues</span></div><div><strong>' . (int) count( $waiting ) . '</strong><span>Waiting or snoozed issues</span></div><div><strong>' . (int) $active . '</strong><span>Expected to continue · ' . (int) count( $records ) . ' total tracked</span></div></div>';
         self::source_health( $report['sources'] ?? array() );
-        echo '<section class="spm-section" aria-labelledby="spm-issues-title"><div class="spm-section-heading"><h2 id="spm-issues-title">Issues to review</h2><span class="spm-meta">Reconciled ' . esc_html( self::date( $report['last_reconciled'] ?? 0, true ) ) . '</span></div>';
-        if ( ! $open ) { echo '<div class="spm-empty"><strong>No open issues in the current report.</strong><p>Check source freshness above before treating the report as complete.</p></div>'; }
-        foreach ( $open as $issue ) { self::issue_card( $issue, $records ); }
-        if ( $waiting ) { echo '<details class="spm-group" open><summary>Waiting and snoozed (' . (int) count( $waiting ) . ')</summary>'; foreach ( $waiting as $issue ) { self::issue_card( $issue, $records ); } echo '</details>'; }
-        if ( $resolved ) { echo '<details class="spm-group"><summary>Resolved history (' . (int) count( $resolved ) . ')</summary>'; foreach ( $resolved as $issue ) { self::issue_card( $issue, $records ); } echo '</details>'; }
+        if ( $selected_issue ) {
+            echo '<section class="spm-section" id="spm-selected-issue" aria-labelledby="spm-selected-title"><div class="spm-section-heading"><h2 id="spm-selected-title">Review selected issue</h2><a href="' . esc_url( self::url() . '#spm-issues-title' ) . '">Back to issue overview</a></div>';
+            if ( isset( $issues[ $selected_issue ] ) ) { self::issue_card( $issues[ $selected_issue ], $records ); }
+            else { echo '<div class="spm-empty"><p>This issue is not in the current report. Choose an issue from the overview below.</p></div>'; }
+            echo '</section>';
+        }
+        echo '<section class="spm-section" aria-labelledby="spm-issues-title"><div class="spm-section-heading"><h2 id="spm-issues-title">Current follow-ups</h2><span class="spm-meta">Reconciled ' . esc_html( self::date( $report['last_reconciled'] ?? 0, true ) ) . '</span></div><p class="spm-meta">Open a client to see its issues, then select an issue to review the evidence or update its status. Separate payment channels remain separate.</p>';
+        if ( ! $current ) { echo '<div class="spm-empty"><strong>No current follow-ups in this view.</strong><p>Check source freshness and the historical review below before treating the report as complete.</p></div>'; }
+        self::client_issues( $current_groups, $records );
+        if ( $waiting ) { echo '<details class="spm-group" open><summary>Waiting and snoozed (' . (int) count( $waiting ) . ')</summary>'; self::client_issues( self::issue_groups( $waiting, $records ), $records ); echo '</details>'; }
+        if ( $historical ) { echo '<details class="spm-group spm-historical"><summary>Historical balances and relationship review (' . (int) count( $historical ) . ')</summary><p class="spm-meta">' . (int) count( $historical_groups ) . ' client groups. Includes invoices created more than 60 days ago and imported relationships whose expected status needs confirmation. These issues are still open; grouping them does not clear a balance or confirm an intentional ending.</p>'; self::client_issues( $historical_groups, $records ); echo '</details>'; }
+        if ( $resolved ) { echo '<details class="spm-group"><summary>Resolved history (' . (int) count( $resolved ) . ')</summary>'; self::client_issues( self::issue_groups( $resolved, $records ), $records ); echo '</details>'; }
         echo '</section><section class="spm-section" aria-labelledby="spm-agreements-title"><div class="spm-section-heading"><h2 id="spm-agreements-title">Expected agreements</h2><a href="' . esc_url( self::url( 'stripe-payments-monitor-legacy' ) ) . '">Site matching &amp; legacy report</a></div><p>Keep each relationship on this list until it is intentionally paused or ended. MDM donor contributions and the combined payment to the LLC are separate stages of the same money.</p><details class="spm-add"><summary>Add a check, manual payment or MDM remittance agreement</summary>';
         self::record_form();
         echo '</details>';
