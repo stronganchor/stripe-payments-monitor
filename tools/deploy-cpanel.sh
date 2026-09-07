@@ -261,7 +261,9 @@ chown "$OWNER_UID:$OWNER_GID" "$DOCROOT/.maintenance"
 kill -0 "$GUARD_PID" 2>/dev/null || die 'Monitor deployment guard is no longer active.'
 mv -- "$PLUGIN" "$BACKUP/previous-tree"
 mv -- "$STAGE" "$PLUGIN"
-wp_safe option update spm_update_branch dev --autoload=no >>"$LOG" 2>&1
+# update_option can return false for an already-correct value. Verify the
+# resulting value instead of treating a no-op as a failed deployment.
+wp_safe eval 'if (get_option("spm_update_branch") !== "dev") { update_option("spm_update_branch", "dev", false); } if (get_option("spm_update_branch") !== "dev") { WP_CLI::error("Update branch could not be saved."); }' >>"$LOG" 2>&1
 timeout 60 runuser -u "$OWNER" -- env HTTPS=on SERVER_PORT=443 SPM_BACKUP_DIR="$BACKUP" "$WP_PHP" "$WP_CLI" --path="$DOCROOT" --skip-themes eval-file "$BACKUP/runtime-after.php" >"$BACKUP/runtime-after.json" 2>>"$LOG"
 manifest "$PLUGIN" >"$BACKUP/live-tree.sha256"
 cmp -s "$BACKUP/package-tree.sha256" "$BACKUP/live-tree.sha256" || die 'Live source differs from the pinned package.'
