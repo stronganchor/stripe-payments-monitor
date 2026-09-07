@@ -1,9 +1,9 @@
 <?php
 /*
 Plugin Name: Stripe Payments Monitor
-Description: Revenue & subscription health report in MainWP. Duplicate customers merged; ignore lists; unlink & internal lists; hourly auto-refresh.
+Description: Private revenue monitoring for Stripe, MoonClerk, checks and MDM remittances, with durable expectations, evidence and follow-up decisions.
 Plugin URI:  https://github.com/stronganchor/stripe-payments-monitor/
-Version:     0.5.4
+Version:     0.6.0
 Update URI:  https://github.com/stronganchor/stripe-payments-monitor
 Author:      Strong Anchor Tech
 */
@@ -32,7 +32,7 @@ define( 'SPM_FILE', __FILE__ );
 define( 'SPM_DIR',  plugin_dir_path( __FILE__ ) );
 
 function spm_get_update_branch() {
-	$branch = 'main';
+	$branch = (string) get_option( 'spm_update_branch', 'main' );
 
 	if ( defined( 'STRIPE_PAYMENTS_MONITOR_UPDATE_BRANCH' ) && is_string( STRIPE_PAYMENTS_MONITOR_UPDATE_BRANCH ) ) {
 		$override = trim( STRIPE_PAYMENTS_MONITOR_UPDATE_BRANCH );
@@ -115,9 +115,22 @@ require_once SPM_DIR . 'includes/admin-dashboard.php';
 
 // 2.4: Data layer (Stripe pull, cache, cron).
 require_once SPM_DIR . 'includes/data-cache.php';
+require_once SPM_DIR . 'includes/stripe-source.php';
+require_once SPM_DIR . 'includes/moonclerk-source.php';
+require_once SPM_DIR . 'includes/monitor.php';
+require_once SPM_DIR . 'includes/monitor-actions.php';
+require_once SPM_DIR . 'includes/monitor-admin.php';
+
+add_action( 'admin_enqueue_scripts', static function( $hook ) {
+    if ( false !== strpos( $hook, 'stripe-payments-monitor' ) ) {
+        wp_enqueue_style( 'spm-monitor', plugins_url( 'assets/monitor.css', SPM_FILE ), [], '0.6.0' );
+    }
+} );
 
 // 2.5: Tiny CSS for red rows & buttons.
 add_action( 'admin_head', function () {
+    $screen = get_current_screen();
+    if ( ! $screen || false === strpos( $screen->id, 'stripe-payments-monitor' ) ) { return; }
 	echo '<style>
 		.spm-error{background:#fee !important}
 		.spm-error td{color:#c00;font-weight:bold}

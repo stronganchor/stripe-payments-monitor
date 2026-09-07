@@ -22,7 +22,7 @@ add_action( 'admin_menu', function () {
 		__( 'Payments Monitor', 'spm' ),
 		'manage_options',
 		'stripe-payments-monitor',
-		[ 'SPM_Admin_Dashboard', 'render' ],
+		[ 'SPM_Monitor_Admin', 'render' ],
 		'dashicons-chart-line'
 	);
 
@@ -33,8 +33,9 @@ add_action( 'admin_menu', function () {
 		__( 'Settings', 'spm' ),
 		'manage_options',
 		'stripe-payments-monitor-settings',
-		[ 'SPM_Admin_Settings', 'render' ]
+		[ 'SPM_Monitor_Admin', 'settings' ]
 	);
+	add_submenu_page( 'stripe-payments-monitor', 'Site matching', 'Site matching', 'manage_options', 'stripe-payments-monitor-legacy', [ 'SPM_Admin_Dashboard', 'render' ] );
 });
 
 /**

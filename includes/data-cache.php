@@ -13,6 +13,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 add_action( 'init', 'spm_schedule_cron' );
 function spm_schedule_cron() {
+    if ( get_option( 'spm_external_scheduler', false ) ) { return; }
     if ( ! wp_next_scheduled( 'spm_hourly_refresh' ) ) {
         wp_schedule_event( time(), 'hourly', 'spm_hourly_refresh' );
     }
@@ -20,6 +21,10 @@ function spm_schedule_cron() {
 
 add_action( 'spm_hourly_refresh', 'spm_cron_refresh' );
 function spm_cron_refresh() {
+    if ( class_exists( 'SPM_Monitor' ) ) {
+        SPM_Monitor::refresh();
+        return;
+    }
     $key = get_option( 'spm_stripe_secret_key', '' );
     if ( $key ) {
         spm_get_cached_report( $key, true );
